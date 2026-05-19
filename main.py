@@ -1,20 +1,34 @@
 from dotenv import load_dotenv
-from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
-from langchain_groq import ChatGroq
-from langchain_ollama import ChatOllama
-from langchain_tavily import TavilySearch
-import os
+from langchain_core.messages import HumanMessage
+from langgraph.graph import MessagesState, StateGraph, END
+
+from node import run_agent_reasoning, tool_node
 
 load_dotenv()
 
-@tool
-def triple(num: float) -> float:
-    """Triples the input number."""
-    return float(num) * 3
+AGENT_REASON = "agent_reasoning"
+ACT = "act"
+LAST = -1
 
-tools = [TavilySearch(max_results=1), triple]
+def should_continue(state: MessagesState) -> str:
+    """Determines whether the agent should continue reasoning or act."""
+    if not state["messages"][LAST].tool_calls:
+        return END
+    return ACT
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0).bind_tools(tools)
+flow = StateGraph(MessagesState)
 
+flow.add_node(AGENT_REASON, run_agent_reasoning)
+flow.set_entry_point(AGENT_REASON)
+flow.add_node(ACT, tool_node)
 
+flow.add_conditional_edges(AGENT_REASON, should_continue, {END: END, ACT: ACT})
+flow.add_edge(ACT, AGENT_REASON)
+
+app = flow.compile()
+app.get_graph().draw_mermaid_png(output_file_path="agent_flow.png")
+
+if __name__ == "__main__":
+    print("Hello ReAct Langgraph with Function Calling")
+    res = app.invoke({"messages": [HumanMessage(content="What is the weather in Tokyo? List it and then triple it.")]})
+    print(res["messages"][LAST].content)
